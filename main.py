@@ -29,6 +29,17 @@ MODEL_ID = os.environ.get("MODEL_ID", "mistralai/Mistral-7B-Instruct-v0.2")
 HF_PROVIDER = os.environ.get("HF_PROVIDER") or None
 
 
+def _get_tool_label(tool_name: str) -> str:
+    """Convertit un nom d'outil MCP en libellé lisible en français."""
+    labels = {
+        "list_gift_ideas": "Récupération des idées cadeaux",
+        "get_gift_idea": "Lecture d'une idée cadeau",
+        "list_groups": "Récupération des groupes",
+        "get_group": "Lecture d'un groupe",
+    }
+    return labels.get(tool_name, f"Appel de l'outil {tool_name}")
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
