@@ -27,10 +27,7 @@ def test_chat_stream_rejects_missing_user_message():
     from fastapi.testclient import TestClient
     from main import app
     client = TestClient(app)
-    # Uniquement des messages assistant, aucun user
-    # _build_task_from_messages retourne une chaîne non-vide même sans message user
-    # donc l'endpoint ne rejette pas la requête (200 avec stream)
     response = client.post("/chat/stream", json={
         "messages": [{"role": "assistant", "content": "Bonjour"}]
     })
-    assert response.status_code == 200
+    assert response.status_code == 422

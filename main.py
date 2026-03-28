@@ -77,9 +77,10 @@ def _build_task_from_messages(messages: list[dict]) -> str:
     parts.append("")
     parts.append("Dernière question de l'utilisateur (à laquelle tu dois répondre maintenant) :")
     last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
-    if last_user:
-        parts.append(last_user.get("content", "").strip())
-    return "\n".join(parts) or "Dis bonjour et propose ton aide pour les idées de cadeaux et groupes."
+    if last_user is None:
+        return ""
+    parts.append(last_user.get("content", "").strip())
+    return "\n".join(parts)
 
 
 def _run_agent_sync(task: str, auth_header: str) -> str:
@@ -267,14 +268,20 @@ async def chat_stream(request: Request, body: ChatRequest):
         raise HTTPException(status_code=422, detail="Aucun message utilisateur")
 
     queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     _executor.submit(_run_agent_stream, task, auth_header, queue, loop)
 
     async def generator():
+        running_loop = asyncio.get_running_loop()
+        deadline = running_loop.time() + 180.0
         try:
             while True:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                remaining = deadline - running_loop.time()
+                if remaining <= 0:
+                    yield {"event": "error", "data": json.dumps({"message": "Timeout global dépassé."})}
+                    break
+                event = await asyncio.wait_for(queue.get(), timeout=min(30.0, remaining))
                 if event is None:
                     break
                 yield event
