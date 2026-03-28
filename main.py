@@ -15,8 +15,10 @@ except ImportError:
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
+import json
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
 
 # Variables d'environnement
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://mcp.lvh.me:3000")
@@ -124,6 +126,84 @@ def _run_agent_sync(task: str, auth_header: str) -> str:
         return str(result)
 
 
+def _run_agent_stream(
+    task: str,
+    auth_header: str,
+    queue: asyncio.Queue,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Lance l'agent et pousse des événements SSE dans la queue."""
+
+    def emit(event_type: str, data: dict) -> None:
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            {"event": event_type, "data": json.dumps(data, ensure_ascii=False)},
+        )
+
+    from smolagents import ToolCallingAgent
+    from smolagents.tools import ToolCollection
+    from smolagents import InferenceClientModel
+
+    try:
+        emit("step", {"label": "Connexion au serveur MCP", "status": "running"})
+
+        server_params = {
+            "url": MCP_SERVER_URL,
+            "transport": "streamable-http",
+            "headers": {"Authorization": auth_header or ""},
+        }
+
+        with ToolCollection.from_mcp(
+            server_params,
+            trust_remote_code=True,
+            structured_output=True,
+        ) as tool_collection:
+            tools = list(tool_collection.tools)
+            if not tools:
+                emit("error", {"message": "Aucun outil disponible depuis le serveur MCP."})
+                return
+
+            emit("step", {"label": "Connexion au serveur MCP", "status": "done"})
+            emit("step", {"label": "Analyse de votre demande", "status": "running"})
+
+            model = InferenceClientModel(
+                model_id=MODEL_ID,
+                token=HF_TOKEN,
+                provider=HF_PROVIDER,
+                max_tokens=1024,
+            )
+
+            def step_callback(step_log) -> None:  # noqa: ANN001
+                if hasattr(step_log, "tool_calls") and step_log.tool_calls:
+                    for tc in step_log.tool_calls:
+                        name = getattr(tc, "name", "")
+                        emit("step", {"label": _get_tool_label(name), "status": "done"})
+
+            agent = ToolCallingAgent(
+                tools=tools,
+                model=model,
+                instructions=(
+                    "Tu es l'assistant de l'application Gifters (gestion d'idées de cadeaux et de groupes). "
+                    "Utilise les outils disponibles pour lister les idées de cadeaux, voir le détail d'une idée, "
+                    "ou lister les groupes de l'utilisateur. Réponds de façon concise et utile en français."
+                ),
+                step_callbacks=[step_callback],
+            )
+
+            result = agent.run(task, reset=True)
+            content = (
+                str(result.output)
+                if hasattr(result, "output") and result.output
+                else str(result)
+            )
+            emit("final", {"content": content or "Je n'ai pas de réponse pour le moment."})
+
+    except Exception as e:
+        emit("error", {"message": str(e)})
+    finally:
+        loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
+
+
 _executor = ThreadPoolExecutor(max_workers=2)
 
 
@@ -168,3 +248,37 @@ async def chat(request: Request, body: ChatRequest):
         raise HTTPException(status_code=500, detail=f"Erreur agent : {str(e)}")
 
     return ChatResponse(message={"role": "assistant", "content": content})
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: Request, body: ChatRequest):
+    """
+    Endpoint SSE : streame les étapes de réflexion puis la réponse finale.
+    Envoyer les messages dans le body JSON, le JWT dans Authorization: Bearer <token>.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    messages = [m.model_dump() for m in body.messages]
+
+    if not messages:
+        raise HTTPException(status_code=422, detail="messages requis")
+
+    task = _build_task_from_messages(messages)
+    if not task.strip():
+        raise HTTPException(status_code=422, detail="Aucun message utilisateur")
+
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    _executor.submit(_run_agent_stream, task, auth_header, queue, loop)
+
+    async def generator():
+        try:
+            while True:
+                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                if event is None:
+                    break
+                yield event
+        except asyncio.TimeoutError:
+            yield {"event": "error", "data": json.dumps({"message": "Timeout : l'agent n'a pas répondu à temps."})}
+
+    return EventSourceResponse(generator())
