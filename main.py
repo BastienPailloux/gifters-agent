@@ -176,6 +176,7 @@ def _run_agent_stream(
 
             def step_callback(step_log) -> None:  # noqa: ANN001
                 if hasattr(step_log, "tool_calls") and step_log.tool_calls:
+                    emit("step", {"label": "Analyse de votre demande", "status": "done"})
                     for tc in step_log.tool_calls:
                         name = getattr(tc, "name", "")
                         emit("step", {"label": _get_tool_label(name), "status": "done"})
@@ -242,7 +243,7 @@ async def chat(request: Request, body: ChatRequest):
         raise HTTPException(status_code=422, detail="Aucun message utilisateur")
 
     try:
-        content = await asyncio.get_event_loop().run_in_executor(
+        content = await asyncio.get_running_loop().run_in_executor(
             _executor, _run_agent_sync, task, auth_header
         )
     except Exception as e:
