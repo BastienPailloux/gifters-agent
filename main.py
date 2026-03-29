@@ -23,6 +23,8 @@ from sse_starlette.sse import EventSourceResponse
 
 # Variables d'environnement
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://mcp.lvh.me:3000")
+# URL du backend Rails (utilisée pour les CORS) — ex: http://localhost:3000 en dev, https://api.gifters.fr en prod
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:3000")
 # Token HF requis pour l'API Inference (serverless) : https://huggingface.co/settings/tokens
 HF_TOKEN = os.environ.get("HF_TOKEN")
 # Modèle utilisé via l'API Inference HF (doit supporter le tool calling)
@@ -224,7 +226,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Rails backend only
+    allow_origins=[BACKEND_URL],
     allow_credentials=True,
     allow_methods=["POST"],
     allow_headers=["*"],
