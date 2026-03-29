@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 
 import json
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -26,7 +27,7 @@ MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://mcp.lvh.me:3000")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 # Modèle utilisé via l'API Inference HF (doit supporter le tool calling)
 # Mistral-7B-Instruct-v0.2 est supporté (v0.3 déprécié → 410 Gone). Sinon : Qwen/Qwen3-8B
-MODEL_ID = os.environ.get("MODEL_ID", "mistralai/Mistral-7B-Instruct-v0.2")
+MODEL_ID = os.environ.get("MODEL_ID", "mistralai/Mistral-7B-Instruct-v0.3")
 # Provider optionnel (auto par défaut) : "together", "fireworks", "fal", "hyperbolic", etc.
 HF_PROVIDER = os.environ.get("HF_PROVIDER") or None
 
@@ -60,7 +61,7 @@ def _build_task_from_messages(messages: list[dict]) -> str:
     if not messages:
         return ""
     # On ne garde que les N derniers échanges pour limiter la taille du contexte
-    max_turns = 10
+    max_turns = 3
     recent = messages[-max_turns * 2 :] if len(messages) > max_turns * 2 else messages
     parts = []
     for m in recent:
@@ -219,6 +220,14 @@ app = FastAPI(
     title="Gifters Agent",
     description="Agent SmolAgent connecté au serveur MCP Gifters",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Rails backend only
+    allow_credentials=True,
+    allow_methods=["POST"],
+    allow_headers=["*"],
 )
 
 
